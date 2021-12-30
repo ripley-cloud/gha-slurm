@@ -8,7 +8,7 @@
     "watch": "tsc --watch",
     "dev": "nodemon",
     "build:live": "nodemon --watch 'src/**/*.ts' src/index.ts",
-    "start": "npm run build:live"
+    "start": "ts-node src/index.ts"
   },
   "repository": {
     "type": "git",
