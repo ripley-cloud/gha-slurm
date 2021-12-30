@@ -1,0 +1,21 @@
+organizations:
+  - login: ripley-cloud
+    url: https://api.github.com/users/ripley-cloud
+    events_url: https://api.github.com/users/ripley-cloud/events{/privacy}
+    repos:
+      - name: gha-slurm
+        runner_config: []
+  - login: jon-bell
+    url: https://api.github.com/users/jon-bell
+    events_url: https://api.github.com/users/jon-bell/events{/privacy}
+    repos:
+      - name: airsonos
+    runner_config: []
+    slurm_cluster_configs: []
+  - login: neu-se
+    url: https://api.github.com/users/neu-se
+    events_url: https://api.github.com/users/neu-se/events{/privacy}
+    repos:
+      - name: boyland-covey.town
+    runner_config: []
+    slurm_cluster_configs: []
