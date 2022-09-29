@@ -13,7 +13,7 @@ dotenv.config();
 
 // const app = new App({
 //     authStrategy: createAppAuth,
-//     appId: 157610, //TODO process.env
+//     appId: 242778, //TODO process.env
 //     privateKey: readFileSync(process.env.PRIVATE_KEY_FILE || '', 'utf8'),
 //     oauth: {
 //         clientId: process.env.OAUTH_CLIENT_ID || '',
@@ -95,8 +95,12 @@ const app = new App({
 // });
 
 app.webhooks.on("workflow_job.queued", async ({ octokit, payload }) => {
-    console.log("Received workflow job event\n");
-    console.log(payload.workflow_job);
+    try {
+        console.log("Received workflow job event\n");
+        console.log(payload.workflow_job);
+    } catch (err) {
+        console.trace(err);
+    }
 });
 
 app.oauth.on("token", async ({ token, octokit }) => {
