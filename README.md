@@ -31,3 +31,13 @@ sequenceDiagram
     Note right of GHA: Assuming that there is still a job to start
     GHA-->>GHApp: WebHook: workflow_job started
 ```
+
+### Workflow for configuring mapping from repo to project
+
+This app will expose a REST API for viewing and updating list of repos mapped to a user:
+* GET /repositories/:username
+ * Returns the list of repositories mapped to :username
+* POST /repositories/:username
+ * Update the entire list of repositories mapped to :username
+ 
+There will be a simple React frontend application for interacting with that API (`npx create-react-app my-app --template typescript`). Communicate with backend by making HTTP requests (axios/fetch/etc).
