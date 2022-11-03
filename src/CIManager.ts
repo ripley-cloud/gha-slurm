@@ -111,8 +111,7 @@ export default class CIManager {
     async validateAndGetGHAToken(ourToken: string) {
         const decoded = jwt.verify(ourToken, this._jwtKey) as LauncherState;
         // make sure that we still need to launch this runner
-        const res = await this._redis.sIsMember(decoded.repositoryURL + decoded.labels.join(","), decoded.workflowId.toString());
-        console.log("res");
+        const res = await this._redis.zScore(decoded.repositoryURL + decoded.labels.join(","), decoded.workflowId.toString());
         console.log(res);
         if (!res) {
             throw "Runner token no longer valid, job cancelled";
@@ -193,7 +192,6 @@ export default class CIManager {
                 console.log('FINISHED')
             })
     }
-
     private async getAllKeys() {
         let cursor = 0;
 
@@ -208,7 +206,6 @@ export default class CIManager {
 
         return await recursiveScan();
     }
-
     async getRepos(user: string) {
         for (let org of this._config.organizations) {
             if (org.login === user) {
@@ -220,10 +217,10 @@ export default class CIManager {
     async addRepo(user: string, repo: string) {
         for (let org of this._config.organizations) {
             if (org.login === user) {
-                org.repos.push({ name: repo });
-                return;
+                return org.repos.push({ name: repo });
             }
         }
+        return 0;
     }
     async getBuilderURL(platform: "x86" | "arm") {
 

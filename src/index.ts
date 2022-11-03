@@ -107,11 +107,18 @@ const ciApp = CIManager.getInstance(app);
 
 expressApp.get('/repositories/:username', async (req, res) => {
     return await ciApp.getRepos(req.params.username);
+    // return json?
 })
 
 expressApp.post('/repositories/:username', async (req, res) => {
-    ciApp.addRepo(req.params.username, req.body.repo);
-    // res.send() ?
+    const result = await ciApp.addRepo(req.params.username, req.body.repo);
+    if (result) {
+        // res.send() ?
+        return;
+    }
+    console.error("Failed to add repo to user, user not found")
+    return res.status(403).send();
+
 })
 
 expressApp.post("/gha/runner", async (req, res) => {
