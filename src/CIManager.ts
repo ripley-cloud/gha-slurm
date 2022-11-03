@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import fetch from 'node-fetch';
 import * as jwt from 'jsonwebtoken';
 import YAML from 'yaml';
-import { createClient } from 'redis';
+import { createClient, RedisClusterOptions } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
 import { InfluxDB, Point } from '@influxdata/influxdb-client';
 
@@ -153,8 +153,7 @@ export default class CIManager {
             return;
         }
         const launcherToken = await jwt.sign(req, this._jwtKey);
-        this._redis.sAdd(req.repositoryURL + req.labels.join(","), req.workflowId.toString());
-        this._redis.zAdd("allJobs", { score: Date.now(), value: req.workflowId.toString() });
+        this._redis.zAdd(req.repositoryURL + req.labels.join(","), { score: Date.now(), value: req.workflowId.toString() });
         this.launchWorker({
             gitHubURL: req.repositoryURL,
             launcherToken: launcherToken,
@@ -163,21 +162,29 @@ export default class CIManager {
         })
     }
     async removeBuildJob(req: LauncherState) {
-        this._redis.zRem("allJobs", req.workflowId.toString());
-        return await this._redis.sRem(req.repositoryURL + req.labels.join(","), req.workflowId.toString());
+        return await this._redis.zRem(req.repositoryURL + req.labels.join(","), req.workflowId.toString());
     }
     async updateInflux() {
         const writeApi = this._influx.getWriteApi(org, bucket);
         writeApi.useDefaultTags({ host: 'host1' });
 
-        const oldestJob = (await this._redis.zRangeWithScores("allJobs", 0, 0))[0];
+        const keys = await this.getAllKeys();
+
+        let numJobs = 0;
+        let oldestJob = (await this._redis.zRangeWithScores(keys.pop() || "", 0, 0))[0];
+
+        keys.forEach(async key => {
+            const jobs = (await this._redis.zRangeWithScores(key, 0, 0));
+            numJobs += jobs.length;
+            oldestJob = oldestJob.score < jobs[0].score ? oldestJob : jobs[0];
+        });
 
         let oldestAge = 0;
         if (oldestJob) {
             oldestAge = Date.now() - oldestJob.score;
         }
 
-        const point = new Point('jobs').uintField("numJobs", await this._redis.zCard("allJobs")).uintField("oldestJobAgeMinutes", Math.floor(oldestAge / 60000));
+        const point = new Point('jobs').uintField("numJobs", numJobs).uintField("oldestJobAgeMinutes", Math.floor(oldestAge / 60000));
         writeApi.writePoint(point);
 
         writeApi
@@ -185,6 +192,38 @@ export default class CIManager {
             .then(() => {
                 console.log('FINISHED')
             })
+    }
+
+    private async getAllKeys() {
+        let cursor = 0;
+
+        const recursiveScan = async (): Promise<string[]> => {
+            const result = await this._redis.scan(cursor, { TYPE: "zset" });
+            cursor = result.cursor;
+            if (cursor === 0) {
+                return result.keys;
+            }
+            return result.keys.concat(await recursiveScan());
+        }
+
+        return await recursiveScan();
+    }
+
+    async getRepos(user: string) {
+        for (let org of this._config.organizations) {
+            if (org.login === user) {
+                return org.repos.map(repo => repo.name);
+            }
+        }
+        return [];
+    }
+    async addRepo(user: string, repo: string) {
+        for (let org of this._config.organizations) {
+            if (org.login === user) {
+                org.repos.push({ name: repo });
+                return;
+            }
+        }
     }
     async getBuilderURL(platform: "x86" | "arm") {
 

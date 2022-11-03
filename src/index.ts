@@ -105,6 +105,15 @@ const expressApp = express();
 expressApp.use(createNodeMiddleware(app));
 const ciApp = CIManager.getInstance(app);
 
+expressApp.get('/repositories/:username', async (req, res) => {
+    return await ciApp.getRepos(req.params.username);
+})
+
+expressApp.post('/repositories/:username', async (req, res) => {
+    ciApp.addRepo(req.params.username, req.body.repo);
+    // res.send() ?
+})
+
 expressApp.post("/gha/runner", async (req, res) => {
     const header = req.headers.authorization;
     if (header) {
