@@ -9,3 +9,35 @@ The high level workflow to launch a build runner is:
 2. Generate a self-signed JWT token that encodes the build request, send this to [ripley-cloud/gha-slurm-munge](https://github.com/ripley-cloud/gha-slurm-munge) to request that an actions runner be scheduled to run in Slurm
 3. Once the Slurm Job is allocated, the node sends the JWT token back to this app, which checks it, and then if valid, refreshes the GitHub runner token (the slurm job might wait in the scheduler for so long that the token expired, which is why there is this intermediate step).
 4. Actions runner starts and connects to GitHub. If there is no build started within 2 minutes (e.g. if the request was satisfied by another runner outside of our control, or canceled by the user), the job terminates and releases its resources
+
+
+### Workflow for starting a runner
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GHA as GitHub Actions 
+    participant GHApp as GitHub App
+    participant Slurm as Slurm Trusted App
+    participant Runner as GitHub Runner on Slurm
+
+    GHA-->>GHApp: WebHook: workflow_job queued
+    GHApp-->>Slurm: CIManager.launchWorker post /runner/start 
+    Slurm-->>Runner: Launch Runner
+    Runner-->>GHApp: Request token to create new runner on GitHub (POST /gha/runner)
+    GHApp-->>Runner: Respond with token to use to create runner
+    Runner-->>GHA: Create new "ephemeral" runner
+    GHA-->>Runner: Start running a job (GH picks next in queue)
+    Note right of GHA: Assuming that there is still a job to start
+    GHA-->>GHApp: WebHook: workflow_job started
+```
+
+### Workflow for configuring mapping from repo to project
+
+This app will expose a REST API for viewing and updating list of repos mapped to a user:
+* GET /repositories/:username
+ * Returns the list of repositories mapped to :username
+* POST /repositories/:username
+ * Update the entire list of repositories mapped to :username
+ 
+There will be a simple React frontend application for interacting with that API (`npx create-react-app my-app --template typescript`). Communicate with backend by making HTTP requests (axios/fetch/etc).
