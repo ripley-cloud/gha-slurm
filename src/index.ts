@@ -8,6 +8,7 @@ import CIManager from './CIManager';
 import express, { response } from "express";
 import { Response } from 'node-fetch';
 import { workerData } from 'worker_threads';
+import cors from 'cors';
 
 
 dotenv.config();
@@ -102,24 +103,9 @@ app.oauth.on("token", async ({ token, octokit }) => {
 });
 
 const expressApp = express();
+expressApp.use(cors());
 expressApp.use(createNodeMiddleware(app));
 const ciApp = CIManager.getInstance(app);
-
-expressApp.get('/repositories/:username', async (req, res) => {
-    return await ciApp.getRepos(req.params.username);
-    // return json?
-})
-
-expressApp.post('/repositories/:username', async (req, res) => {
-    const result = await ciApp.addRepo(req.params.username, req.body.repo);
-    if (result) {
-        // res.send() ?
-        return;
-    }
-    console.error("Failed to add repo to user, user not found")
-    return res.status(403).send();
-
-})
 
 expressApp.post("/gha/runner", async (req, res) => {
     const header = req.headers.authorization;
