@@ -157,7 +157,7 @@ export default class CIManager {
             gitHubURL: req.repositoryURL,
             launcherToken: launcherToken,
             runnerLabels: req.labels.join(','),
-            tokenURL: "https://ci-dev.in.ripley.cloud/gha/runner",
+            tokenURL: process.env.RUNNER_URL || '',
         })
     }
     async removeBuildJob(req: LauncherState) {
