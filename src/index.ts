@@ -44,6 +44,7 @@ app.webhooks.on("workflow_job.queued", async ({ octokit, payload }) => {
                 return;
             }
         }
+        console.log("Found self-hosted tag on this request, continuing");
         await CIManager.getInstance(app).launchBuildJob({
             owner: payload.repository.owner.login,
             repositoryName: payload.repository.name,
@@ -120,6 +121,16 @@ expressApp.post("/gha/runner", async (req, res) => {
     }
     console.error("Received an invalid request with no auth header!")
     return res.status(403).send();
+});
+
+expressApp.get("/gha/installations", async (req, res) => {
+    try {
+        const url = req.query.url;
+        // return checkInstalled(url);
+    } catch (err) {
+        console.trace(err);
+        return res.status(500).send();
+    }
 });
 
 expressApp.listen(process.env.PORT || 5050, async () => {

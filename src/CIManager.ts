@@ -111,7 +111,7 @@ export default class CIManager {
     async validateAndGetGHAToken(ourToken: string) {
         const decoded = jwt.verify(ourToken, this._jwtKey) as LauncherState;
         // make sure that we still need to launch this runner
-        const res = await this._redis.zScore(decoded.repositoryURL + decoded.labels.join(","), decoded.workflowId.toString());
+        const res = await this._redis.zScore(decoded.repositoryURL, decoded.workflowId.toString());
         console.log(res);
         if (!res) {
             throw "Runner token no longer valid, job cancelled";
@@ -152,7 +152,7 @@ export default class CIManager {
             return;
         }
         const launcherToken = await jwt.sign(req, this._jwtKey);
-        await this._redis.zAdd(req.repositoryURL + req.labels.join(","), { score: Date.now(), value: req.workflowId.toString() });
+        await this._redis.zAdd(req.repositoryURL, { score: Date.now(), value: req.workflowId.toString() });
         this.launchWorker({
             gitHubURL: req.repositoryURL,
             launcherToken: launcherToken,
@@ -161,30 +161,27 @@ export default class CIManager {
         })
     }
     async removeBuildJob(req: LauncherState) {
-        return await this._redis.zRem(req.repositoryURL + req.labels.join(","), req.workflowId.toString());
+        return await this._redis.zRem(req.repositoryURL, req.workflowId.toString());
     }
     async updateInflux() {
         const writeApi = this._influx.getWriteApi(org, bucket);
         writeApi.useDefaultTags({ host: 'host1' });
 
-        const keys = await this.getAllKeys();
+        const keys = await this._redis.keys("*");
 
-        let numJobs = 0;
-        let oldestJob = (await this._redis.zRangeWithScores(keys.pop() || "", 0, 0))[0];
-
-        keys.forEach(async key => {
-            const jobs = (await this._redis.zRangeWithScores(key, 0, 0));
-            numJobs += jobs.length;
-            oldestJob = oldestJob.score < jobs[0].score ? oldestJob : jobs[0];
-        });
-
-        let oldestAge = 0;
-        if (oldestJob) {
-            oldestAge = Date.now() - oldestJob.score;
+        for (const key of keys) {
+            if (!(await this._redis.type(key) === "zset")) {
+                continue;
+            }
+            const jobs = await this._redis.zRangeWithScores(key, 0, 0);
+            let numJobs = jobs.length;
+            let oldestAge = 0;
+            if (jobs[0]) {
+                oldestAge = Date.now() - jobs[0].score;
+            }
+            const point = new Point('jobs').tag('repo', key).uintField("numJobs", numJobs).uintField("oldestJobAgeMinutes", Math.floor(oldestAge / 60000));
+            writeApi.writePoint(point);
         }
-
-        const point = new Point('jobs').uintField("numJobs", numJobs).uintField("oldestJobAgeMinutes", Math.floor(oldestAge / 60000));
-        writeApi.writePoint(point);
 
         writeApi
             .close()
@@ -196,7 +193,9 @@ export default class CIManager {
         let cursor = 0;
 
         const recursiveScan = async (): Promise<string[]> => {
+            console.log("Scanning");
             const result = await this._redis.scan(cursor, { TYPE: "zset" });
+            console.log("Scan done");
             cursor = result.cursor;
             if (cursor === 0) {
                 return result.keys;
