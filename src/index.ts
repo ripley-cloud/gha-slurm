@@ -108,6 +108,21 @@ expressApp.use(cors());
 expressApp.use(createNodeMiddleware(app));
 const ciApp = CIManager.getInstance(app);
 
+expressApp.post("/gha/runner", async (req, res) => {
+    const header = req.headers.authorization;
+    if (header) {
+        try {
+            const { token } = await ciApp.validateAndGetGHAToken(header);
+            return res.json({ token });
+        } catch (err) {
+            console.trace(err);
+            return res.status(500).send();
+        }
+    }
+    console.error("Received an invalid request with no auth header!")
+    return res.status(403).send();
+});
+
 expressApp.get("/gha/installations", async (req, res) => {
     try {
         const url = req.query.url;
