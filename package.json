@@ -33,6 +33,7 @@
     "typescript": "^4.5.2"
   },
   "dependencies": {
+    "@influxdata/influxdb-client": "^1.31.0",
     "@octokit/app": "^12.0.5",
     "axios": "^0.24.0",
     "cors": "^2.8.5",

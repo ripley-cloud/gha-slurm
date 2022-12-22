@@ -1,12 +1,16 @@
 import { App } from '@octokit/app';
 import { createAppAuth } from '@octokit/auth-app';
+import * as dotenv from 'dotenv';
 import { Octokit } from '@octokit/core';
 import * as fs from 'fs';
 import fetch from 'node-fetch';
 import * as jwt from 'jsonwebtoken';
 import YAML from 'yaml';
-import { createClient } from 'redis';
+import { createClient, RedisClusterOptions } from 'redis';
 import { v4 as uuidv4 } from 'uuid';
+import { InfluxDB, Point } from '@influxdata/influxdb-client';
+
+dotenv.config();
 
 type OrganizationConfiguration = {
     login: string;
@@ -42,6 +46,7 @@ type GHWorkerBatchRequest = {
     gitHubURL: string;
     launcherToken: string;
     runnerLabels?: string;
+    tokenURL: string;
 }
 type TokenCache = {
     repoURL: string;
@@ -49,14 +54,19 @@ type TokenCache = {
     expiresAt: number;
 }
 type LauncherState = {
-    req: {
-        owner: string,
-        repositoryName: string,
-        repositoryURL: string,
-        labels: string[]
-    },
-    createdAt: Date
+    owner: string,
+    repositoryName: string,
+    repositoryURL: string,
+    labels: string[],
+    workflowId: number
 }
+
+// You can generate an API token from the "API Tokens Tab" in the UI
+const url = process.env.INFLUX_URL || '';
+const token = process.env.INFLUX_TOKEN || '';
+const org = process.env.INFLUX_ORG || '';
+const bucket = process.env.INFLUX_BUCKET || '';
+
 export default class CIManager {
     private _app: App;
     private static _instance: CIManager;
@@ -64,6 +74,7 @@ export default class CIManager {
     private tokenCache: TokenCache[] = [];
     private _redis;
     private _jwtKey: string = "";
+    private _influx: InfluxDB;
 
     static getInstance(app: App): CIManager {
         if (CIManager._instance === undefined) {
@@ -75,6 +86,7 @@ export default class CIManager {
         this._app = app;
         this._config = { organizations: [] };
         this._redis = createClient();
+        this._influx = new InfluxDB({ url, token });
         if (fs.existsSync("config.yml")) {
             this._config = YAML.parse(fs.readFileSync("config.yml", "utf-8")) as AppConfiguration;
         }
@@ -85,7 +97,7 @@ export default class CIManager {
     }
     async launchWorker(batchReq: GHWorkerBatchRequest) {
         if (process.env.GHA_SLURM_ADDRESS) {
-            const response = await fetch(process.env.GHA_SLURM_ADDRESS + '/runner/start', {
+            await fetch(process.env.GHA_SLURM_ADDRESS + '/runner/start', {
                 headers: {
                     'Content-Type': 'application/json',
                     'Accept': "application/json",
@@ -96,15 +108,16 @@ export default class CIManager {
             });
         }
     }
-    async validateAndGetGHAToken(ourToken: string){
+    async validateAndGetGHAToken(ourToken: string) {
         const decoded = jwt.verify(ourToken, this._jwtKey) as LauncherState;
-        console.log(decoded)
-        //make sure that we still need to launch this runner
-        const res = await this._redis.sRem(decoded.req.repositoryURL+decoded.req.labels, ourToken);
-        // if(!res)
-        //     throw "Runner token no longer valid";
+        // make sure that we still need to launch this runner
+        const res = await this._redis.zScore(decoded.repositoryURL, decoded.workflowId.toString());
+        console.log(res);
+        if (!res) {
+            throw "Runner token no longer valid, job cancelled";
+        }
         const ghaToken = await this.startBuildJob(decoded);
-        return {token: ghaToken};
+        return { token: ghaToken };
     }
     async promiseForToken(octokit: Octokit, owner: string, repositoryName: string, repositoryURL: string) {
         console.log("Fetching new token for " + owner + "/" + repositoryName)
@@ -115,7 +128,7 @@ export default class CIManager {
             tokenCache.expiresAt = Date.parse(token.data.expires_at);
         return token.data.token;
     }
-    async startBuildJob({req}: LauncherState){
+    async startBuildJob(req: LauncherState) {
         const orgInstallationOctokit = this._installations.find(v => v.orgName == req.owner)?.octokit;
         if (!orgInstallationOctokit) {
             console.log("No app installation found for org " + req.owner);
@@ -132,27 +145,81 @@ export default class CIManager {
         }
         return await tokenCache.token;
     }
-    async launchBuildJob(req: {
-        owner: string,
-        repositoryName: string,
-        repositoryURL: string
-        labels: string[]
-    }) {
-        console.log(req);
+    async launchBuildJob(req: LauncherState) {
         const orgInstallationOctokit = this._installations.find(v => v.orgName == req.owner)?.octokit;
         if (!orgInstallationOctokit) {
             console.log("No app installation found for org " + req.owner);
             return;
         }
-        const launcherToken = await jwt.sign({ "req": req , "createdAt": Date.now()}, this._jwtKey);
-        this._redis.sAdd(req.repositoryURL+req.labels.join(","), launcherToken);
-
-       
-        console.log(launcherToken)
+        const launcherToken = await jwt.sign(req, this._jwtKey);
+        await this._redis.zAdd(req.repositoryURL, { score: Date.now(), value: req.workflowId.toString() });
         this.launchWorker({
-            gitHubURL: req.repositoryURL, launcherToken: launcherToken,
-            runnerLabels: req.labels.join(',')
+            gitHubURL: req.repositoryURL,
+            launcherToken: launcherToken,
+            runnerLabels: req.labels.join(','),
+            tokenURL: process.env.RUNNER_URL || '',
         })
+    }
+    async removeBuildJob(req: LauncherState) {
+        return await this._redis.zRem(req.repositoryURL, req.workflowId.toString());
+    }
+    async updateInflux() {
+        const writeApi = this._influx.getWriteApi(org, bucket);
+        writeApi.useDefaultTags({ host: 'host1' });
+
+        const keys = await this._redis.keys("*");
+
+        for (const key of keys) {
+            if (!(await this._redis.type(key) === "zset")) {
+                continue;
+            }
+            const jobs = await this._redis.zRangeWithScores(key, 0, 0);
+            let numJobs = jobs.length;
+            let oldestAge = 0;
+            if (jobs[0]) {
+                oldestAge = Date.now() - jobs[0].score;
+            }
+            const point = new Point('jobs').tag('repo', key).uintField("numJobs", numJobs).uintField("oldestJobAgeMinutes", Math.floor(oldestAge / 60000));
+            writeApi.writePoint(point);
+        }
+
+        writeApi
+            .close()
+            .then(() => {
+                console.log('FINISHED')
+            })
+    }
+    private async getAllKeys() {
+        let cursor = 0;
+
+        const recursiveScan = async (): Promise<string[]> => {
+            console.log("Scanning");
+            const result = await this._redis.scan(cursor, { TYPE: "zset" });
+            console.log("Scan done");
+            cursor = result.cursor;
+            if (cursor === 0) {
+                return result.keys;
+            }
+            return result.keys.concat(await recursiveScan());
+        }
+
+        return await recursiveScan();
+    }
+    async getRepos(user: string) {
+        for (let org of this._config.organizations) {
+            if (org.login === user) {
+                return org.repos.map(repo => repo.name);
+            }
+        }
+        return [];
+    }
+    async addRepo(user: string, repo: string) {
+        for (let org of this._config.organizations) {
+            if (org.login === user) {
+                return org.repos.push({ name: repo });
+            }
+        }
+        return 0;
     }
     async getBuilderURL(platform: "x86" | "arm") {
 
@@ -178,7 +245,7 @@ export default class CIManager {
                 octokit: new Octokit({
                     authStrategy: createAppAuth,
                     auth: {
-                        appId: 157610, //TODO process.env?
+                        appId: process.env.APP_ID,
                         privateKey: fs.readFileSync(process.env.PRIVATE_KEY_FILE || '', 'utf8'),
                         installationId: installation.id,
                     },
