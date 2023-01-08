@@ -112,7 +112,6 @@ export default class CIManager {
         const decoded = jwt.verify(ourToken, this._jwtKey) as LauncherState;
         // make sure that we still need to launch this runner
         const res = await this._redis.zScore(decoded.repositoryURL, decoded.workflowId.toString());
-        console.log(res);
         if (!res) {
             throw "Runner token no longer valid, job cancelled";
         }
@@ -163,6 +162,18 @@ export default class CIManager {
     async removeBuildJob(req: LauncherState) {
         return await this._redis.zRem(req.repositoryURL, req.workflowId.toString());
     }
+    async checkInstalled(url: string) {
+        // get org name from url
+        const orgName = url.split("/")[3];
+        const installation = this._installations.find(v => v.orgName == orgName);
+        if (installation) {
+            const repos = await installation.octokit.request("GET /installation/repositories");
+            if (repos.data.repositories.find(v => v.html_url == url)) {
+                return true;
+            }
+        }
+        return false;
+    }
     async updateInflux() {
         const writeApi = this._influx.getWriteApi(org, bucket);
         writeApi.useDefaultTags({ host: 'host1' });
@@ -189,38 +200,6 @@ export default class CIManager {
                 console.log('FINISHED')
             })
     }
-    private async getAllKeys() {
-        let cursor = 0;
-
-        const recursiveScan = async (): Promise<string[]> => {
-            console.log("Scanning");
-            const result = await this._redis.scan(cursor, { TYPE: "zset" });
-            console.log("Scan done");
-            cursor = result.cursor;
-            if (cursor === 0) {
-                return result.keys;
-            }
-            return result.keys.concat(await recursiveScan());
-        }
-
-        return await recursiveScan();
-    }
-    async getRepos(user: string) {
-        for (let org of this._config.organizations) {
-            if (org.login === user) {
-                return org.repos.map(repo => repo.name);
-            }
-        }
-        return [];
-    }
-    async addRepo(user: string, repo: string) {
-        for (let org of this._config.organizations) {
-            if (org.login === user) {
-                return org.repos.push({ name: repo });
-            }
-        }
-        return 0;
-    }
     async getBuilderURL(platform: "x86" | "arm") {
 
     }
@@ -241,7 +220,8 @@ export default class CIManager {
         const installations = await this._app.octokit.request('GET /app/installations');
         for (let installation of installations.data) {
             this._installations.push({
-                orgName: installation.account?.login || '', id: installation.id,
+                orgName: installation.account?.login || '',
+                id: installation.id,
                 octokit: new Octokit({
                     authStrategy: createAppAuth,
                     auth: {
