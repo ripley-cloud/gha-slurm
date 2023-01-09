@@ -15,7 +15,7 @@ dotenv.config();
 
 const app = new App({
     authStrategy: createAppAuth,
-    appId: process.env.APP_ID || 242778, //TODO process.env
+    appId: process.env.APP_ID || 242778,
     privateKey: readFileSync(process.env.PRIVATE_KEY_FILE || '', 'utf8'),
     oauth: {
         clientId: process.env.OAUTH_CLIENT_ID || '',
@@ -124,13 +124,18 @@ expressApp.post("/gha/runner", async (req, res) => {
 });
 
 expressApp.get("/gha/installations", async (req, res) => {
-    try {
-        const url = req.query.url;
-        // return checkInstalled(url);
-    } catch (err) {
-        console.trace(err);
-        return res.status(500).send();
+    const url = req.query.url as string;
+    if (url) {
+        try {
+            const installed = await ciApp.checkInstalled(url);
+            return res.send(installed);
+        } catch (err) {
+            console.trace(err);
+            return res.status(500).send();
+        }
     }
+    console.error("Received an invalid request with no url!")
+    return res.status(403).send('Received an invalid request with no url!');
 });
 
 expressApp.listen(process.env.PORT || 5050, async () => {
